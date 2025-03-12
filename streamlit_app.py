@@ -8,13 +8,7 @@ from streamlit_navigation_bar import st_navbar
 
 
 
-# 👉 Database connection details
-server = "172.18.1.25"
-# database = "JBB_POS_CL"
-# database = "JBB_POS_CL"
-database = "JBB_POS_CL"
-username = "dev_user"
-password = "newdream@1234"
+
 
 conn_str = f"DRIVER={{SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password}"
 
