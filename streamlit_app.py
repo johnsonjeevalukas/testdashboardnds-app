@@ -3,9 +3,15 @@ import pandas as pd
 import pyodbc
 import plotly.express as px
 from datetime import datetime
+from streamlit_navigation_bar import st_navbar
+
+
+
 
 # 👉 Database connection details
 server = "172.18.1.25"
+# database = "JBB_POS_CL"
+# database = "JBB_POS_CL"
 database = "JBB_POS_CL"
 username = "dev_user"
 password = "newdream@1234"
@@ -34,49 +40,36 @@ try:
 except Exception as e:
     zip_code_list = ["All"]
 
-selected_zip = st.sidebar.selectbox("Select Zip Code", zip_code_list)
-zip_filter = f"AND ZIP_CODE = '{selected_zip}'" if selected_zip != "All" else ""
+selected_zip = st.sidebar.multiselect("Select Zip Code", zip_code_list)
+if selected_zip:  # Check if the list is not empty
+    zip_filter = f"AND ZIP_CODE IN ({', '.join([f"'{zip}'" for zip in selected_zip])})"
+else:
+    zip_filter = ""
 
-# 👉 SQL Queries
-UPCOMING_PARTY_COUNT = f"""
-    SELECT COUNT(TRAY_ORDER_ID) AS COUNT 
-    FROM T_ECOMM_PARTY_ORD_MASTER 
-    WHERE DELIVERY_DATE > GETDATE() AND STATUS != 'CANCELED' {date_filter} {zip_filter}
-"""
+def test(x):
+    order_by = "BOX DESC" if x == "Box" else "GROSS_SALES DESC"
+    return f"""
+     SELECT 
+        ODTL.ITEM_ID,
+        ISNULL(ISNULL(IM.NAME,OTHERS.NAME),'OTHERS') AS NAME,
+        SUM(ISNULL(ISNULL(ISNULL(ODTL.BOX,OLP.BOX),ODTL.TRAY_QTY),0)) AS BOX,
+        TRY_CONVERT(NUMERIC(8,2),SUM(ODTL.PRICE)) AS GROSS_SALES
+    FROM T_ECOMM_PARTY_ORD_DETAIL ODTL
+    LEFT JOIN T_ECOMM_PARTY_ORDER_LOOKUP OLP ON OLP.ITEM_PARTY_ID = ODTL.ITEM_PARTY_ID
+    LEFT JOIN T_ECOMM_ITEM_MASTER IM ON IM.Clover_ID = ODTL.ITEM_ID
+    LEFT JOIN (SELECT DISTINCT ITEM_ID, NAME FROM T_ECOMM_PARTY_ORD_DETAIL) OTHERS ON OTHERS.ITEM_ID=ODTL.ITEM_ID
+    WHERE ODTL.TRAY_ORDER_ID IN (
+        SELECT TRAY_ORDER_ID FROM T_ECOMM_PARTY_ORD_MASTER 
+        WHERE STATUS != 'CANCELED' {date_filter} {zip_filter}
+    )
+    GROUP BY ODTL.ITEM_ID, IM.NAME, OTHERS.NAME
+    ORDER BY {order_by}
+    """
+    
+NET_CMOUNT_CMTD="""SELECT TRY_CAST(SUM(TRY_CONVERT(NUMERIC(8,2),NET_AMOUNT))AS VARCHAR) AS NET_AMOUNT_COMMITED FROM T_ECOMM_PARTY_ORD_MASTER WHERE STATUS IN ('OPEN','COMPLETED')"""
+PYMNT_RCVD="""SELECT TRY_CAST(SUM(TRY_CONVERT(NUMERIC(8,2),PAYMENT_RECEIVED))AS VARCHAR) AS PYMNT_AMOUNT_COMMITED FROM T_ECOMM_PARTY_ORD_MASTER WHERE STATUS IN ('OPEN','COMPLETED')"""
+PARTY_COUNT="""SELECT COUNT(1) AS PARTY_COUNT FROM T_ECOMM_PARTY_ORD_MASTER WHERE STATUS IN ('OPEN','COMPLETED')"""
 
-COMPLETED_PARTY_COUNT = f"""
-    SELECT COUNT(TRAY_ORDER_ID) AS COUNT 
-    FROM T_ECOMM_PARTY_ORD_MASTER 
-    WHERE DELIVERY_DATE <= GETDATE() AND STATUS = 'COMPLETED' {date_filter} {zip_filter}
-"""
-
-PENDING_PARTY_COUNT = f"""
-    SELECT COUNT(TRAY_ORDER_ID) AS COUNT 
-    FROM T_ECOMM_PARTY_ORD_MASTER 
-    WHERE DELIVERY_DATE <= GETDATE() AND STATUS = 'OPEN' {date_filter} {zip_filter}
-"""
-
-CANCELED_PARTY_COUNT = f"""
-    SELECT COUNT(TRAY_ORDER_ID) AS COUNT 
-    FROM T_ECOMM_PARTY_ORD_MASTER 
-    WHERE DELIVERY_DATE <= GETDATE() AND STATUS = 'CANCELED' {date_filter} {zip_filter}
-"""
-
-PAYMENT_TYP_WISE_QUERY = f"""
-    SELECT SUM(PYMNT.PAYMENT_AMOUNT) AS PAYMENT_AMOUNT, PYMNT.PAYMENT_TYPE 
-    FROM T_ECOMM_PARTY_ORD_MASTER OM 
-    INNER JOIN T_ECOMM_PARTY_ORDER_PAYMENTS_HISTORY PYMNT 
-    ON PYMNT.TRAY_ORDER_ID = OM.TRAY_ORDER_ID 
-    WHERE 1=1 {date_filter} {zip_filter}
-    GROUP BY PYMNT.PAYMENT_TYPE
-"""
-
-DIFF_DISCOUNT_NETAMT = f"""
-    SELECT 'DISCOUNT AMOUNT' AS AMT_TYPE, SUM((TOTAL * DISCOUNT_PERCENT) / 100) AS AMT 
-    FROM T_ECOMM_PARTY_ORD_MASTER WHERE 1=1 {date_filter} {zip_filter}
-    UNION ALL
-    SELECT 'NET AMOUNT', SUM(NET_AMOUNT) FROM T_ECOMM_PARTY_ORD_MASTER WHERE 1=1 {date_filter} {zip_filter}
-"""
 
 Summary_Party1 = f"""
     SELECT COUNT(1) AS COUNT_ORD, SUM(NET_AMOUNT) AS NET_AMOUNT,
@@ -91,53 +84,30 @@ Summary_Party1 = f"""
 # 👉 Execute Queries
 try:
     with pyodbc.connect(conn_str) as conn:
-        upcoming_count = pd.read_sql_query(UPCOMING_PARTY_COUNT, conn).iloc[0, 0] or 0
-        completed_count = pd.read_sql_query(COMPLETED_PARTY_COUNT, conn).iloc[0, 0] or 0
-        pending_count = pd.read_sql_query(PENDING_PARTY_COUNT, conn).iloc[0, 0] or 0
-        canceled_count = pd.read_sql_query(CANCELED_PARTY_COUNT, conn).iloc[0, 0] or 0
-        
-        PAYMENT_TYP_WISE = pd.read_sql_query(PAYMENT_TYP_WISE_QUERY, conn)
-        DIFF_DISCOUNT_NETAMT_RESULT = pd.read_sql_query(DIFF_DISCOUNT_NETAMT, conn)
+        Part_details_1 = pd.read_sql_query(test("BOX DESC"), conn)
+        NET_CMOUNT_CMTD = pd.read_sql_query(NET_CMOUNT_CMTD, conn)
+        PYMNT_RCVD = pd.read_sql_query(PYMNT_RCVD, conn)
+        PARTY_COUNT = pd.read_sql_query(PARTY_COUNT, conn)
         Summary_Party1_data = pd.read_sql_query(Summary_Party1, conn)
+        party_details = Part_details_1
+        if not party_details.empty:
+            party_details = party_details.head(10)
+        if Part_details_1.empty:
+            Party_details_1 = pd.DataFrame(columns=["ITEM_ID", "NAME", "BOX", "GROSS_SALES"])
+        if NET_CMOUNT_CMTD.empty:
+            NET_CMOUNT_CMTD = pd.DataFrame(columns=["NET_AMOUNT_COMMITED"])
+        if PYMNT_RCVD.empty:
+            PYMNT_RCVD = pd.DataFrame(columns=["PYMNT_AMOUNT_COMMITED"])
+        if PARTY_COUNT.empty:
+            PARTY_COUNT = pd.DataFrame(columns=["PARTY_COUNT"])
+        if Summary_Party1_data.empty:
+            Summary_Party1_data = pd.DataFrame({"COUNT_ORD": [], "NET_AMOUNT": [], "MONTH_NAME": [], "MONTH_NUMBER": [], "YEAR": []})
 except Exception as e:
     st.error(f"Database error: {e}")
 
-# 👉 Handle Missing Data
-if PAYMENT_TYP_WISE.empty:
-    PAYMENT_TYP_WISE = pd.DataFrame({"PAYMENT_TYPE": ["No Data"], "PAYMENT_AMOUNT": [0]})
-
-if DIFF_DISCOUNT_NETAMT_RESULT.empty:
-    DIFF_DISCOUNT_NETAMT_RESULT = pd.DataFrame({"AMT_TYPE": ["No Data"], "AMT": [0]})
-
-if Summary_Party1_data.empty:
-    Summary_Party1_data = pd.DataFrame({"COUNT_ORD": [], "NET_AMOUNT": [], "MONTH_NAME": [], "MONTH_NUMBER": [], "YEAR": []})
-
-# 👉 Total Net Amount for KPI
-total_net_amount = DIFF_DISCOUNT_NETAMT_RESULT.loc[
-    DIFF_DISCOUNT_NETAMT_RESULT['AMT_TYPE'] == 'NET AMOUNT', 'AMT'
-].sum() or 0
-
-# ✅ KPI Cards
-st.header("📊 KPI Overview")
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Upcoming Orders", upcoming_count)
-col2.metric("Completed Orders", completed_count)
-col3.metric("Pending Orders", pending_count)
-col4.metric("Canceled Orders", canceled_count)
-col5.metric("Total Net Amount",total_net_amount)
-
-# ✅ Data for Visualization
-df = pd.DataFrame({
-    "Status": ["Upcoming", "Completed", "Pending", "Canceled"],
-    "Count": [upcoming_count, completed_count, pending_count, canceled_count]
-})
-
 order_data = Summary_Party1_data.sort_values(by=["YEAR", "MONTH_NUMBER"])
 
-# ✅ Bar Chart
-bar_chart = px.bar(df, x="Status", y="Count", color="Status", title="Order Status Count")
 
-# ✅ Line + Bar Chart
 fig = px.bar(order_data, x="MONTH_NAME", y="COUNT_ORD", text="COUNT_ORD",
              labels={"COUNT_ORD": "Order Count", "MONTH_NAME": "Month"},
              title="Monthly Order Count & Net Amount")
@@ -149,17 +119,91 @@ fig.update_layout(
     yaxis_title="Order Count",
     xaxis_title="Month"
 )
+# ✅ KPI Cards
+st.header("📊 Party Sales Trend")
 
-# 👉 Display Charts
-st.plotly_chart(bar_chart, use_container_width=True)
+# ✅ Use a custom div for column gap
+st.markdown(
+    """
+    <div class="custom-metric-container">
+        <div class="metric-item">
+            <p>Total Parties</p>
+            <h3>{}</h3>
+        </div>
+        <div class="metric-item">
+            <p>NetAmt Commited</p>
+            <h3>{}</h3>
+        </div>
+        <div class="metric-item">
+            <p>NetAmt Received</p>
+            <h3>{}</h3>
+        </div>
+        <div class="metric-item">
+            <p>Gross Sale</p>
+            <h3>{}</h3>
+        </div>
+    </div>
+    """.format(
+        PARTY_COUNT["PARTY_COUNT"].sum() if not PARTY_COUNT.empty else 0,
+        NET_CMOUNT_CMTD["NET_AMOUNT_COMMITED"].sum() if not NET_CMOUNT_CMTD.empty else 0,
+        PYMNT_RCVD["PYMNT_AMOUNT_COMMITED"].sum() if not PYMNT_RCVD.empty else 0,
+        Part_details_1["GROSS_SALES"].sum().round(2)  if not Part_details_1.empty else 0,
+    ),
+    unsafe_allow_html=True
+)
 st.plotly_chart(fig, use_container_width=True)
 
-# ✅ Styling
+
+st.markdown("""<div class='TOP10'>🏆 Top 10 Highly Sold </div>""", unsafe_allow_html=True)
+sort_option = st.selectbox("Sort By:", options=["Box", "Gross Sales"], index=0)
+TOP=st.number_input(label="Enter Top Count" ,placeholder="10" , value=10)
+party_details = pd.read_sql_query(test(sort_option), conn)
+if not party_details.empty:
+    
+    st.dataframe(party_details.head(TOP), use_container_width=True)
+else:
+    st.write("No data available.")
+# ✅ CSS Styling
 st.markdown(
     """
     <style>
-    .stApp { background-color: #1dc4b1; }
-    .stMetric { color: #c48d1d; }
+    .stApp { 
+        background-color: #1dc4b1; 
+    }
+    .custom-metric-container {
+        display: flex;
+        gap: 30px; /* Increase gap between columns */
+        justify-content: center;
+        margin-bottom: 20px;
+    }
+    .metric-item {
+        background-color: white;
+        color: #c48d1d;
+        padding: 10px;
+        border-radius: 10px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        text-align: center;
+        width: 180px;
+    }
+    .TOP10 {
+        background-color: white;
+        color: #c48d1d;
+        padding: 10px;
+        border-radius: 10px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        text-align: center;
+        margin-bottom: 20px; /* Add space below title */
+    }
+    .stDataFrame {
+        background-color: white;
+        border-radius: 10px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        color: #333;
+        font-size: 14px;
+        margin-bottom: 60px; /* Space below table */
+    }
+    </style>
+    
     </style>
     """,
     unsafe_allow_html=True
